@@ -17,15 +17,25 @@ From each distinct state the integer earner counts E_i are recovered exactly:
 E_i = floor(rate_i · N / 100) plus the largest fractional remainders, pinned
 so that sum(E_i) == the page's own `trophies_earned` total.
 
-- **N(h)** — a saturating power law in hours since launch, fitted on the
-  case's own steps, floored at the last observed N.
-- **E_i(h)** — each trophy's last observed count grown on a per-trophy slope
-  fitted on ln E against ln(1 + h), shrunk toward the count-weighted pooled
-  slope across trophies (small-count trophies carry mostly pooled information;
-  a trophy with a healthy count and a clean fit keeps its own slope).
-- **Quantiles** — logit-scale spread from a backtest-calibrated mixture: the
-  fit's own residuals, count noise (1/sqrt(E)), a horizon term, and extra
-  spread while the page is stale past its refresh cadence.
+Two forces move a rate between states. **Dilution**: a refresh re-imports the
+player list, and when the import widens the tracked base faster than a
+trophy's earners grow, the rate drops — the launch-night import (638 → 3,868
+in 1.5 h) diluted the typical rate by −1.8 logits, and the 40-hour import
+(3,857 → 14,028) by about the same, while early-game trophies with many
+earners held up. **Growth**: real earners accrue continuously.
+
+- **Observed staircase** (≥ 2 distinct states) — each trophy's dilution shift
+  is its own logit change across the observed refreshes, shrunk toward the
+  count-weighted pool, then extrapolated over the N growth still expected
+  before the target (a power law in hours since launch, fitted on the case's
+  own steps and clamped to a launch-week band), damped.
+- **Flat history** (one state: the page was stale all window) — the next
+  import is modelled from the documented launch-night prior: full player-list
+  re-import, −1.8-logit typical dilution tilted by ln(E) per trophy, decaying
+  with hours since launch.
+- **Quantiles** — logit spread from a horizon-scaled refresh term (calibrated
+  at 0.12 logits across the 90-minute practice refresh, growing with √horizon,
+  capped) plus 2-decimal quantisation noise.
 
 Stdlib-only Python 3, deterministic, runs in well under a second per case.
 

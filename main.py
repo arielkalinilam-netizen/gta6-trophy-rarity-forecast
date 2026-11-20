@@ -11,41 +11,47 @@ the players the page tracks.  Exophase does not update on a schedule; it
 refreshes a game's page in steps, and at each step it re-reads both the player
 list and the trophy lists, so N and every E move together in a jump.  A read
 therefore shows the state as of the last refresh before it, and between
-refreshes the printed numbers are exactly constant (the practice cases show
-seven identical reads over three and a half hours).
+refreshes the printed numbers are exactly constant (six and a half hours of
+live reads on 19-20 Nov show every rate vector identical across a refresh that
+moved N from 14,882 to 14,028: the re-import re-based both sides of the ratio).
 
 So the history is a staircase, and every step is one complete observation of
-(E_i, N) at a refresh instant.  Modelling that state directly is far better
-behaved than modelling the printed rate: a refresh multiplies N and every E by
-their own factors, and the ratio only then moves by player behaviour.
+(E_i, N) at a refresh instant.  Two things move a rate between states:
+
+  dilution   a refresh re-imports the player list; when the import widens the
+             tracked base faster than any trophy's earners grow, every rate
+             drops.  The launch-night import (638 -> 3,868 in 1.5 h) diluted
+             the typical rate by -1.8 logits, and the 40-hour import (3,857 ->
+             14,028) by about the same, while a few early-game trophies with
+             many earners held up: the per-trophy shift tilts by ln(E).
+  growth     real earners accrue continuously between refreshes.
 
 Per distinct state we take the integer earner counts E_i, pinned by the page's
 own trophies_earned total: sum_i(E_i) == trophies_earned and E_i =
 floor(rate_i * N / 100) plus the largest fractional remainders.  Then:
 
-  N(h)    a saturating power law in hours since launch (exponent fitted on the
-          case's own steps, clamped to a launch-week band), floored at the last
-          observed N and capped so the median can never outrun the data;
-  E_i(h)  the last observed count grown at a per-trophy slope fitted on ln E
-          against ln(1 + hours), shrunk toward the rate-weighted slope of the
-          whole trophy set (share information across trophies: most trophies
-          sit at a handful of earners where a private fit is noise), damped for
-          long gaps and capped, then discretised.
+  * Observed staircase (>= 2 distinct states): each trophy's dilution shift is
+    its own logit change across the observed refreshes, shrunk toward the
+    pool's (a handful of earners makes a private fit noise), and extrapolated
+    over the N growth still expected before the target, damped.  N(h) follows
+    a power law in hours since launch, fitted on the case's own steps and
+    clamped to a launch-week band.
+  * Flat history (one state: the page was stale the whole window, as on launch
+    night): no refresh has been observed, so the next one is modelled from the
+    documented prior - the player list re-imports (x6) and the typical rate
+    dilutes by -1.8 logits, tilted per trophy by ln(E) at x0.4 per ln above
+    the median earner count (early-game trophies track the base).  The shift
+    scales with the horizon's share of the refresh cadence.
+  * A trophy every tracked player holds (rate >= 99.5%) is the platinum: it
+    stays at 100.
 
-The median is E_i(target) / N(target), per trophy, then made monotone
-non-increasing in trophy id (Exophase lists story trophies in progression
-order, so a later chapter cannot be held by more players than an earlier one;
-pool-adjacent-violators on the logit scale, weighted by sqrt of the count).
-
-The spread is the quadratic mix of three parts, floored and capped on the
-logit scale: the typical absolute logit error of the same fit replayed on the
-case's own history (each of the last few steps predicted from the steps before
-it), the quantisation noise of a count behind a 2-decimal rate
-(1/sqrt(E)), and a horizon term (sigma per square-root day, as the house
-baseline uses, damped because launch-week growth decelerates).  The three
-house baselines all lose the practice at ~1.51 because they forecast the
-stale rate with a narrow spread into a refresh; here a refresh is part of the
-state model, not a surprise.
+The spread is the quadratic mix of a horizon-scaled refresh term (calibrated
+at 0.12 logits across the 90-minute practice refresh and growing with the
+square root of the horizon, capped) and the quantisation noise of a count
+behind a 2-decimal rate (1/sqrt(E), capped).  The three house baselines all
+lose the practice at ~1.51 because they forecast the stale rate with a narrow
+spread into a refresh; here a refresh is part of the state model, not a
+surprise.
 
 Deterministic: no randomness, no network, standard library only.
 """
@@ -67,20 +73,18 @@ Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
 T0 = "2026-11-19T00:00:00Z"   # launch instant (the game released 19 Nov 2026)
 
 # ------------------------------------------------------------------ tuning
-SHRINK = 0.45          # weight of the pooled slope over the trophy's own
-N_EXP_MIN, N_EXP_MAX = 0.25, 1.35   # plausible launch-week N elasticity band
-N_CAP_GROWTH = 4.0     # N may at most x this over the forecast gap
-N_FLAT_MULT = 6.06     # flat-history refresh prior (the documented 638 -> 3,868)
-E_FLAT_GROWTH = 1.0    # flat-history earner growth prior (keep the counts)
-E_CAP = 3.5           # one trophy's earners may at most x this over the gap
-DAMP = 0.10            # damping of the log-time extrapolation per gap unit
-SIGMA_WALK = 0.14      # logit spread per sqrt day of horizon
-SIGMA_MIN = 0.28
-SIGMA_MAX = 2.0
-SIGMA_K = 1.20         # multiplier on the backtest's typical |logit error|
-BACKTEST_STEPS = 5     # how many of the last steps to replay
-STALE_SIGMA = 0.55     # extra spread while the page is stale past its cadence
-CADENCE_MIN = 45.0     # reads further apart than this mean a stale page
+N_EXP_MIN, N_EXP_MAX = 0.5, 0.9    # plausible launch-week N elasticity band
+N_CAP_GROWTH = 4.0                 # N may at most x this over the forecast gap
+DILUTE_FLAT = -1.80                # flat-history dilution per full import (x6)
+DILUTE_TILT = 0.40                 # per ln(E) above the median earner count
+DILUTE_MED_E = 1.5                 # the median trophy's ln(E) on launch night
+FLAT_HORIZON_DAYS = 1.5            # a full import is expected within this span
+EXTRAP_DAMP = 0.60                 # damping of the observed dilution extrapolation
+SHIFT_UP_CAP = 1.2                 # the median may not outrun the last rate by more
+SHRINK_E = 30.0                    # earner count at which a private shift is trusted
+SIGMA_BASE = 0.12                  # refresh spread at the 90-minute practice horizon
+SIGMA_HORIZON_D = 0.0625           # the horizon sigma was calibrated on (90 min)
+SIGMA_MAX = 0.42
 
 
 def clamp(x):
@@ -172,13 +176,6 @@ def wls(xs, ys, ws):
     return a, b
 
 
-def damped(slope, gap, cap):
-    if gap <= 0:
-        return 0.0
-    g = slope * gap / (1.0 + DAMP * gap)
-    return max(-1.2, min(cap, g))
-
-
 # ------------------------------------------------------------------ model
 
 class Case:
@@ -191,7 +188,7 @@ class Case:
         self.t_target = parse_ts(case["target"])
         self.t_last = parse_ts(self.reads[-1]["slot"])
         self.horizon_days = case["horizon_minutes"] / 1440.0
-        # distinct states, oldest first: (h, N, [E_i])
+        # distinct states, oldest first: (h, N, rates, [E_i])
         self.steps = []
         for r in self.reads:
             h = max(0.0, (parse_ts(r["slot"]) - self.t0) / 3600.0)
@@ -208,176 +205,149 @@ class Case:
     def n_slope(self, upto=None):
         k = len(self.steps) if upto is None else upto
         if k < 2:
-            return 1.1
+            return 0.7
         xs = [math.log1p(self.steps[j][0]) for j in range(k)]
         ys = [math.log(self.steps[j][1]) for j in range(k)]
         fit = wls(xs, ys, [1.0] * k)
         if not fit:
-            return 1.1
+            return 0.7
         return max(N_EXP_MIN, min(N_EXP_MAX, fit[1]))
 
-    def n_at(self, h_target, upto=None):
+    def n_growth_factor(self, upto=None):
+        """Expected N(h_target) / N(last read), floored at 1 and capped."""
         k = len(self.steps) if upto is None else upto
         h_last, n_last = self.steps[k - 1][0], self.steps[k - 1][1]
+        h_target = max(0.0, (self.t_target - self.t0) / 3600.0)
         gap = h_target - h_last
         if gap <= 0:
-            return n_last
-        if k < 2:
-            # flat history: no refresh observed.  The documented launch-night
-            # refresh re-imported the player list (638 -> 3,868 in 1.5 h, x6);
-            # take that as the prior for the next refresh within a day, damped
-            # the further out the target is.
-            frac = max(0.0, min(1.0, gap / 1.5))
-            return n_last * (1.0 + (N_FLAT_MULT - 1.0) * frac)
+            return 1.0
         b = self.n_slope(k)
-        grown = n_last * math.exp(damped(b, math.log1p(h_target) - math.log1p(h_last), 2.2))
-        return min(grown, n_last * N_CAP_GROWTH)
+        factor = math.exp(b * (math.log1p(h_target) - math.log1p(h_last)))
+        return max(1.0, min(N_CAP_GROWTH, factor))
 
-    # ---- E_i(h)
-    def pooled_slope(self, upto=None, min_e=4.0):
-        k = len(self.steps) if upto is None else upto
-        num = 0.0
-        den = 0.0
-        for i in range(self.n):
-            pts = [(self.steps[j][0], self.steps[j][3][i])
-                   for j in range(k) if self.steps[j][3][i] is not None]
-            pts = [p for p in pts if p[1] >= min_e]
-            d = {}
-            for x, e in pts:
-                d[x] = e
-            pts = sorted(d.items())
-            if len(pts) < 2:
-                continue
-            (x0, e0) = pts[0]
-            for x, e in pts[1:]:
-                if e0 > 0 and e > 0:
-                    w = math.sqrt(min(e, e0))
-                    num += math.log(e / e0) * w
-                    den += (math.log1p(x) - math.log1p(x0)) * w
-        return num / den if den > 1e-9 else 0.35
-
-    def own_slope(self, i, upto=None):
-        k = len(self.steps) if upto is None else upto
-        pts = [(self.steps[j][0], self.steps[j][3][i]) for j in range(k)
-               if self.steps[j][3][i] is not None]
-        d = {}
-        for x, e in pts:
-            d[x] = e
-        pts = sorted(d.items())
-        if len(pts) < 3:
-            return None
-        fit = wls([math.log1p(p[0]) for p in pts],
-                  [math.log(max(0.5, p[1])) for p in pts],
-                  [max(1.0, p[1]) for p in pts])
-        return fit[1] if fit else None
-
-    def earners_at(self, i, h_target, upto=None, pooled=None):
-        k = len(self.steps) if upto is None else upto
-        last_e = None
-        last_h = self.steps[k - 1][0]
-        for j in range(k - 1, -1, -1):
+    def last_counts(self, i):
+        """The trophy's most recent earner count, 0.0 if it never printed."""
+        for j in range(len(self.steps) - 1, -1, -1):
             c = self.steps[j][3][i]
             if c is not None:
-                last_e = float(c)
-                last_h = self.steps[j][0]
-                break
-        if last_e is None:
-            # no count in any distinct state (the trophy appeared mid-history):
-            # take the latest read that prints it
-            for j in range(len(self.reads) - 1, -1, -1):
-                v = self.reads[j]["rates"][i]
-                if v is not None:
-                    last_e = max(0.0, v * self.steps[min(j, k - 1)][1] / 100.0)
-                    last_h = self.steps[min(j, k - 1)][0]
-                    break
-        if last_e is None:
-            return 0.0
-        own = self.own_slope(i, k)
-        if pooled is None:
-            pooled = self.pooled_slope(k)
-        # Shrink a small-count trophy's own slope toward the pooled one: with a
-        # handful of earners the private fit is noise.  A trophy with a healthy
-        # count and a clean fit keeps its own slope.
-        if own is None:
-            slope = pooled
-        elif last_e >= 30:
-            slope = own
-        else:
-            w = min(1.0, math.sqrt(max(1.0, last_e)) / math.sqrt(30.0))
-            slope = w * own + (1.0 - w) * pooled
-        slope = max(0.0, slope)
-        gap = math.log1p(h_target) - math.log1p(last_h)
-        return last_e * math.exp(damped(slope, gap, E_CAP))
+                return float(c)
+        for j in range(len(self.reads) - 1, -1, -1):
+            v = self.reads[j]["rates"][i]
+            if v is not None:
+                return max(0.0, v * self.steps[min(j, len(self.steps) - 1)][1] / 100.0)
+        return 0.0
 
 
-def medians_at(c: Case, h_target, upto=None):
-    k = len(c.steps) if upto is None else upto
-    if k < 1:
-        return None
-    pooled = c.pooled_slope(k)
-    n_t = c.n_at(h_target, k)
-    # A flat history (one distinct state: the page was stale the whole window)
-    # carries no refresh or growth observation at all.  A launch-night page in
-    # that state is the pre-launch snapshot, which a refresh re-bases: model
-    # the refresh as the rules document it (the player list re-imported), with
-    # a wide uncertainty on both the refresh factor and the earner growth.
-    flat = k < 2
-    logits = []
-    weights = []
+def observed_shifts(c: Case):
+    """Per-trophy logit shift across the observed refreshes (shrunk toward the
+    pool), plus the N factor those refreshes spanned.  Returns (None, 1.0)
+    when the history holds a single distinct state."""
+    k = len(c.steps)
+    if k < 2:
+        return None, 1.0
+    first, last = c.steps[0], c.steps[k - 1]
+    n_factor = last[1] / first[1] if first[1] > 0 else 1.0
+    # pooled shift, weighted by the earner count each shift rests on
+    num = den = 0.0
     for i in range(c.n):
-        # A flat history has no growth observation: keep the counts (the page
-        # is one stale snapshot; the next refresh re-bases N, not E).
-        e = c.earners_at(i, h_target, k, 0.0 if flat else pooled)
-        if flat:
-            e = e * E_FLAT_GROWTH
-        # A trophy every tracked player holds (rate 100) grows with N: the
-        # player import itself carries the trophy.
-        if c.steps[k - 1][2][i] is not None and c.steps[k - 1][2][i] >= 99.5:
-            e = n_t
-        e = min(e, n_t)
-        rate = 100.0 * e / n_t if n_t > 0 else 0.01
-        logits.append(logit_pct(rate))
-        weights.append(math.sqrt(max(0.5, e)))
-    # No cross-trophy smoothing: the live data shows neighbouring trophies
-    # moving independently (chapter completion is not strictly ordered in the
-    # earn rates), so each trophy's fitted median stands as it is.
+        if first[2][i] is None or last[2][i] is None:
+            continue
+        d = logit_pct(last[2][i]) - logit_pct(first[2][i])
+        e = max(1.0, last[3][i] if last[3][i] is not None else 1.0)
+        w = math.sqrt(min(e, SHRINK_E))
+        num += d * w
+        den += w
+    pool = num / den if den > 0 else DILUTE_FLAT
+    shifts = []
+    for i in range(c.n):
+        if first[2][i] is None or last[2][i] is None:
+            shifts.append(pool)
+            continue
+        d = logit_pct(last[2][i]) - logit_pct(first[2][i])
+        e = max(1.0, last[3][i] if last[3][i] is not None else 1.0)
+        w = min(1.0, math.sqrt(e) / math.sqrt(SHRINK_E))
+        shifts.append(w * d + (1.0 - w) * pool)
+    return shifts, n_factor
+
+
+def dilution_shifts(c: Case):
+    """Per-trophy logit shift to apply between the last read and the target."""
+    shifts, n_seen = observed_shifts(c)
+    if shifts is None:
+        # Flat history: no refresh observed.  Model the next import from the
+        # documented launch-night prior, tilted per trophy by ln(E), scaled by
+        # how much of a refresh cadence the horizon spans.
+        # A 90-minute practice horizon holds a full import on launch night
+        # (638 -> 3,868 between 04:00 and 04:30): the pre-launch snapshot was
+        # re-based onto the real player base, diluting every rate -1.8 logits
+        # in full.  Later imports are smaller relative to a mature base, so
+        # the prior decays with hours since launch, and only the horizon's
+        # share of a cadence day applies.
+        h_last = c.steps[-1][0]
+        if h_last < 12.0:
+            # launch window: an import is imminent and huge (the practice's
+            # 90-minute horizon held a full x6 re-base)
+            frac = 1.0
+        else:
+            decay = 12.0 / (h_last + 12.0)
+            frac = decay * min(1.0, c.horizon_days / 1.0)
+        out = []
+        for i in range(c.n):
+            e = max(1.0, c.last_counts(i))
+            tilt = DILUTE_TILT * (math.log(e) - DILUTE_MED_E)
+            out.append((DILUTE_FLAT + tilt) * frac)
+        return out
+    # Observed staircase: extrapolate the shifts over the N growth still
+    # expected before the target, damped.
+    n_future = c.n_growth_factor()
+    if n_seen > 1.01:
+        scale = EXTRAP_DAMP * math.log(n_future) / math.log(n_seen)
+    else:
+        # refreshes observed but N unchanged (a ratio-invariant re-read): no
+        # dilution evidence; fall back to a hard-damped flat prior.
+        scale = 0.25 * min(1.0, c.horizon_days / FLAT_HORIZON_DAYS)
+    scale = max(-1.5, min(1.5, scale))
+    return [s * scale for s in shifts]
+
+
+def medians_at(c: Case):
+    k = len(c.steps)
+    shifts = dilution_shifts(c)
+    logits = []
+    for i in range(c.n):
+        r_last = None
+        for j in range(k - 1, -1, -1):
+            if c.steps[j][2][i] is not None:
+                r_last = c.steps[j][2][i]
+                break
+        if r_last is None:
+            logits.append(logit_pct(0.01))
+            continue
+        if r_last >= 99.5:
+            # the platinum: every tracked player holds it
+            logits.append(logit_pct(100.0))
+            continue
+        lg = logit_pct(r_last) + shifts[i]
+        # the median cannot outrun the last printed rate by much, so a noisy
+        # private shift cannot explode upward
+        lg = min(lg, logit_pct(r_last) + SHIFT_UP_CAP)
+        logits.append(lg)
     return logits
 
 
 def spreads_for(c: Case, meds):
-    walk = SIGMA_WALK * math.sqrt(max(0.02, c.horizon_days))
-    # stale-page term: how far past the last refresh the target sits
-    stale = 0.0
-    if c.horizon_days * 1440.0 > CADENCE_MIN:
-        stale = min(0.4, STALE_SIGMA * math.sqrt(c.horizon_days) / 3.0)
-    # backtest: replay the fit on the case's own steps
-    errs = []
-    for cut in range(max(2, len(c.steps) - BACKTEST_STEPS), len(c.steps)):
-        h_cut = c.steps[cut][0]
-        if h_cut <= 0.2:
-            continue
-        pred = medians_at(c, h_cut, cut)
-        if pred is None:
-            continue
-        for i in range(c.n):
-            e = c.steps[cut][3][i]
-            if e is None:
-                continue
-            actual = math.log(max(0.5, e) / max(1.0, c.steps[cut][1]))
-            errs.append(abs(pred[i] - actual))
-    if errs:
-        errs.sort()
-        base = errs[len(errs) // 2]
-    else:
-        base = 0.30
-    base = min(1.0, max(0.06, base))
-    spreads = []
+    # refresh uncertainty grows with the square root of the horizon,
+    # calibrated at the 90-minute practice refresh
+    s_h = SIGMA_BASE * math.sqrt(max(SIGMA_HORIZON_D, c.horizon_days) / SIGMA_HORIZON_D)
+    s_h = min(SIGMA_MAX, s_h)
     last_n = c.steps[-1][1]
+    spreads = []
     for i in range(c.n):
-        e = max(0.8, expit(meds[i]) * 0.01 * last_n)
-        noise = 1.0 / math.sqrt(max(1.0, e))
-        s = math.sqrt((SIGMA_K * base) ** 2 + noise ** 2 + walk ** 2 + stale ** 2)
-        spreads.append(s)
+        # quantisation of a 2-decimal rate: negligible next to the refresh
+        # term, keep a small floor so tiny rates still get a little room
+        p = expit(meds[i]) / 100.0
+        noise = 0.005 * 100.0 / max(1e-4, p * (100.0 - p))
+        spreads.append(math.sqrt(s_h ** 2 + min(0.05, noise) ** 2))
     return spreads
 
 
@@ -387,14 +357,11 @@ def forecast_case(case, name):
     if not case["history"]:
         raise ValueError(f"{name} has no history")
     c = Case(case)
-    h_target = max(0.0, (c.t_target - c.t0) / 3600.0)
-    meds = medians_at(c, h_target)
-    if meds is None:
-        return fallback(case)
+    meds = medians_at(c)
     spreads = spreads_for(c, meds)
     out = []
     for i, trophy in enumerate(c.trophies):
-        s = min(SIGMA_MAX, max(SIGMA_MIN, spreads[i]))
+        s = min(SIGMA_MAX, max(0.06, spreads[i]))
         qs = [round4(expit(meds[i] + z * s)) for z in Z]
         out.append({"id": trophy["id"], "q": qs})
     return {"trophies": out}
